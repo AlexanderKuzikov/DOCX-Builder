@@ -79,24 +79,24 @@ function processSingleBatch(inputDir, folderName) {
 function cleanContent(xml) {
     let c = xml;
     
-    // 1. Удаляем настройки секций (sectPr)
-    c = c.replace(/<w:sectPr[sS]*?</w:sectPr>/g, '');
-    c = c.replace(/<w:sectPr[sS]*?/>/g, '');
+    // 1. Удаляем sectPr (используем [^]* вместо [sS]* для надежности)
+    // [^]* означает "любой символ, который не является ничем" (то есть всё)
+    c = c.replace(/<w:sectPr[^]*?</w:sectPr>/g, '');
+    c = c.replace(/<w:sectPr[^]*?/>/g, '');
 
-    // 2. Удаляем w14:paraId и w14:textId (системные ID)
-    // Поддержка " и ' кавычек
+    // 2. Атрибуты - используем простые строковые замены в цикле, если регулярки ломаются
+    // Но регулярки надежнее. Проверяй кавычки.
+    
     c = c.replace(/w14:paraId=["'][^"']*["']/g, '');
     c = c.replace(/w14:textId=["'][^"']*["']/g, '');
 
-    // 3. Удаляем rsid (версионность)
-    // Явный список регулярных выражений вместо цикла (так надежнее)
     c = c.replace(/w:rsidR=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidRDefault=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidP=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidRPr=["'][^"']*["']/g, '');
 
-    // w:id больше НЕ трогаем
-
+    // w:id НЕ трогаем
+    
     return c;
 }
 
