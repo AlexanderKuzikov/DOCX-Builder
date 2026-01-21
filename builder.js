@@ -3,7 +3,7 @@ const path = require('path');
 const AdmZip = require('adm-zip');
 
 const ROOT_DIR = path.join(__dirname, 'IN');
-const EMPTY_LINE_XML = '<w:p/>'; 
+const EMPTY_LINE_XML = '<w:p><w:pPr><w:keepNext/></w:pPr></w:p>'; 
 
 function processBatches() {
     if (!fs.existsSync(ROOT_DIR)) {
