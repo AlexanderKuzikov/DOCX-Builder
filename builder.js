@@ -26,13 +26,11 @@ function processSingleBatch(inputDir, folderName) {
 
     if (files.length === 0) return;
 
-    // 1. Читаем Master
     const masterPath = path.join(inputDir, files[0]);
     let masterZip;
     try { masterZip = new AdmZip(masterPath); } catch (e) { return; }
     let masterXml = masterZip.readAsText('word/document.xml');
 
-    // 2. Ищем точку вставки (перед первым sectPr в хвосте)
     const bodyEndIndex = masterXml.lastIndexOf('</w:body>');
     if (bodyEndIndex === -1) return;
 
@@ -62,7 +60,6 @@ function processSingleBatch(inputDir, folderName) {
                     if (bodyTagClose !== -1 && bodyTagClose < end) {
                         let content = xml.substring(bodyTagClose + 1, end);
                         
-                        // Очистка (облегченная версия)
                         content = cleanContent(content);
                         contentToAppend += EMPTY_LINE_XML + content;
                     }
@@ -82,23 +79,23 @@ function processSingleBatch(inputDir, folderName) {
 function cleanContent(xml) {
     let c = xml;
     
-    // 1. sectPr удаляем ОБЯЗАТЕЛЬНО (иначе сломаются страницы)
+    // 1. Удаляем настройки секций (sectPr)
     c = c.replace(/<w:sectPr[sS]*?</w:sectPr>/g, '');
     c = c.replace(/<w:sectPr[sS]*?/>/g, '');
 
-    // 2. paraId / textId - безопасное удаление
-    c = c.replace(/w14:paraId="[^"]*"/g, '');
-    c = c.replace(/w14:textId="[^"]*"/g, '');
+    // 2. Удаляем w14:paraId и w14:textId (системные ID)
+    // Поддержка " и ' кавычек
+    c = c.replace(/w14:paraId=["'][^"']*["']/g, '');
+    c = c.replace(/w14:textId=["'][^"']*["']/g, '');
 
-    // 3. rsid - безопасное удаление (версионность)
-    const rsidAttrs = ['w:rsidR', 'w:rsidRDefault', 'w:rsidP', 'w:rsidRPr'];
-    rsidAttrs.forEach(attr => {
-        const regex = new RegExp(`${attr}="[^"]*"`, 'g');
-        c = c.replace(regex, '');
-    });
+    // 3. Удаляем rsid (версионность)
+    // Явный список регулярных выражений вместо цикла (так надежнее)
+    c = c.replace(/w:rsidR=["'][^"']*["']/g, '');
+    c = c.replace(/w:rsidRDefault=["'][^"']*["']/g, '');
+    c = c.replace(/w:rsidP=["'][^"']*["']/g, '');
+    c = c.replace(/w:rsidRPr=["'][^"']*["']/g, '');
 
-    // 4. w:id НЕ УДАЛЯЕМ! (Именно он мог ломать стили)
-    // Я убрал строку c = c.replace(/w:id="[^"]*"/g, '');
+    // w:id больше НЕ трогаем
 
     return c;
 }
