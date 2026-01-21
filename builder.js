@@ -3,6 +3,8 @@ const path = require('path');
 const AdmZip = require('adm-zip');
 
 const ROOT_DIR = path.join(__dirname, 'IN');
+
+// Пустая строка с keepNext (не отрывать от следующего)
 const EMPTY_LINE_XML = '<w:p><w:pPr><w:keepNext/></w:pPr></w:p>'; 
 
 function processBatches() {
@@ -21,8 +23,9 @@ function processBatches() {
 
 function processSingleBatch(inputDir, folderName) {
     const files = fs.readdirSync(inputDir)
+        // Фильтр и сортировка с поддержкой дробных чисел (1.5, 2.1 и т.д.)
         .filter(file => file.endsWith('.docx') && /^\d/.test(file))
-        .sort((a, b) => parseInt(a) - parseInt(b));
+        .sort((a, b) => parseFloat(a) - parseFloat(b));
 
     if (files.length === 0) return;
 
@@ -94,7 +97,6 @@ function cleanContent(xml) {
     c = c.replace(/w:rsidRPr=["'][^"']*["']/g, '');
 
     // 4. w:id (на всякий случай убираем, раз с ним открывалось)
-    // Если позже захотим стили чинить - уберем эту строку.
     c = c.replace(/w:id=["'][^"']*["']/g, '');
 
     return c;
