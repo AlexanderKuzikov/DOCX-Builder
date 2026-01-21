@@ -21,7 +21,7 @@ function processBatches() {
 
 function processSingleBatch(inputDir, folderName) {
     const files = fs.readdirSync(inputDir)
-        .filter(file => file.endsWith('.docx') && /^\d/.test(file))
+        .filter(file => file.endsWith('.docx') && /^d/.test(file))
         .sort((a, b) => parseInt(a) - parseInt(b));
 
     if (files.length === 0) return;
@@ -32,25 +32,15 @@ function processSingleBatch(inputDir, folderName) {
     try { masterZip = new AdmZip(masterPath); } catch (e) { return; }
     let masterXml = masterZip.readAsText('word/document.xml');
 
-    // 2. Ищем точку вставки (самый надежный метод)
-    // Находим </w:body>. Всё, что перед ним — это контент + секции.
-    // Нам нужно вставить ПЕРЕД первой секцией, которая идет в конце.
-    // Секции в конце выглядят как <w:sectPr>...</w:sectPr> (может быть несколько) или <w:sectPr/>
-    // Мы ищем позицию первого <w:sectPr в "хвосте" body.
-    
+    // 2. Ищем точку вставки (перед первым sectPr в хвосте)
     const bodyEndIndex = masterXml.lastIndexOf('</w:body>');
     if (bodyEndIndex === -1) return;
 
-    // Берем хвост (3000 символов)
     const tail = masterXml.substring(Math.max(0, bodyEndIndex - 3000), bodyEndIndex);
-    
-    // Ищем ПЕРВЫЙ w:sectPr в этом хвосте.
-    // Регулярка ищет <w:sectPr с начала строки или после тега.
     const sectPrMatch = tail.match(/<w:sectPr/);
     
     let insertIndex = bodyEndIndex;
     if (sectPrMatch) {
-        // Если нашли sectPr, то точка вставки = начало хвоста + индекс найденного sectPr
         insertIndex = (Math.max(0, bodyEndIndex - 3000)) + sectPrMatch.index;
     }
 
@@ -64,7 +54,6 @@ function processSingleBatch(inputDir, folderName) {
                 const zip = new AdmZip(filePath);
                 const xml = zip.readAsText('word/document.xml');
                 
-                // Парсим тело
                 const start = xml.indexOf('<w:body');
                 const end = xml.lastIndexOf('</w:body>');
 
@@ -73,7 +62,7 @@ function processSingleBatch(inputDir, folderName) {
                     if (bodyTagClose !== -1 && bodyTagClose < end) {
                         let content = xml.substring(bodyTagClose + 1, end);
                         
-                        // Очистка
+                        // Очистка (облегченная версия)
                         content = cleanContent(content);
                         contentToAppend += EMPTY_LINE_XML + content;
                     }
@@ -93,28 +82,23 @@ function processSingleBatch(inputDir, folderName) {
 function cleanContent(xml) {
     let c = xml;
     
-    // 1. Удаляем ВСЕ sectPr (и полные, и короткие, и с атрибутами)
-    // Важно: жадность регулярки. Ищем от <w:sectPr до </w:sectPr> или />
-    c = c.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, '');
-    c = c.replace(/<w:sectPr[\s\S]*?\/>/g, '');
+    // 1. sectPr удаляем ОБЯЗАТЕЛЬНО (иначе сломаются страницы)
+    c = c.replace(/<w:sectPr[sS]*?</w:sectPr>/g, '');
+    c = c.replace(/<w:sectPr[sS]*?/>/g, '');
 
-    // 2. Удаляем конфликтующие атрибуты (грубый метод без кавычек)
-    // Удаляем w14:paraId="..." и w:rsid...="..."
-    
-    const attrs = [
-        'w14:paraId', 'w14:textId',
-        'w:rsidR', 'w:rsidRDefault', 'w:rsidP', 'w:rsidRPr',
-        'w:id'
-    ];
-    
-    attrs.forEach(attr => {
-        // Ищем: (пробел или нет) + имя + ="..." 
+    // 2. paraId / textId - безопасное удаление
+    c = c.replace(/w14:paraId="[^"]*"/g, '');
+    c = c.replace(/w14:textId="[^"]*"/g, '');
+
+    // 3. rsid - безопасное удаление (версионность)
+    const rsidAttrs = ['w:rsidR', 'w:rsidRDefault', 'w:rsidP', 'w:rsidRPr'];
+    rsidAttrs.forEach(attr => {
         const regex = new RegExp(`${attr}="[^"]*"`, 'g');
         c = c.replace(regex, '');
-        // И с одинарными кавычками
-        const regexSingle = new RegExp(`${attr}='[^']*'`, 'g');
-        c = c.replace(regexSingle, '');
     });
+
+    // 4. w:id НЕ УДАЛЯЕМ! (Именно он мог ломать стили)
+    // Я убрал строку c = c.replace(/w:id="[^"]*"/g, '');
 
     return c;
 }
