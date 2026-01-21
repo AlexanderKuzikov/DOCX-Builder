@@ -21,7 +21,7 @@ function processBatches() {
 
 function processSingleBatch(inputDir, folderName) {
     const files = fs.readdirSync(inputDir)
-        .filter(file => file.endsWith('.docx') && /^d/.test(file))
+        .filter(file => file.endsWith('.docx') && /^\d/.test(file))
         .sort((a, b) => parseInt(a) - parseInt(b));
 
     if (files.length === 0) return;
@@ -79,24 +79,24 @@ function processSingleBatch(inputDir, folderName) {
 function cleanContent(xml) {
     let c = xml;
     
-    // 1. Удаляем sectPr (используем [^]* вместо [sS]* для надежности)
-    // [^]* означает "любой символ, который не является ничем" (то есть всё)
-    c = c.replace(/<w:sectPr[^]*?</w:sectPr>/g, '');
-    c = c.replace(/<w:sectPr[^]*?/>/g, '');
+    // 1. sectPr (безопасные регулярки без new RegExp)
+    c = c.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, '');
+    c = c.replace(/<w:sectPr[\s\S]*?\/>/g, '');
 
-    // 2. Атрибуты - используем простые строковые замены в цикле, если регулярки ломаются
-    // Но регулярки надежнее. Проверяй кавычки.
-    
+    // 2. Атрибуты ID
     c = c.replace(/w14:paraId=["'][^"']*["']/g, '');
     c = c.replace(/w14:textId=["'][^"']*["']/g, '');
 
+    // 3. Версионность
     c = c.replace(/w:rsidR=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidRDefault=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidP=["'][^"']*["']/g, '');
     c = c.replace(/w:rsidRPr=["'][^"']*["']/g, '');
 
-    // w:id НЕ трогаем
-    
+    // 4. w:id (на всякий случай убираем, раз с ним открывалось)
+    // Если позже захотим стили чинить - уберем эту строку.
+    c = c.replace(/w:id=["'][^"']*["']/g, '');
+
     return c;
 }
 
