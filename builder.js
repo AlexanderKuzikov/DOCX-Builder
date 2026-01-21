@@ -2,116 +2,121 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-// ПУТЬ К ПАПКЕ С КОМПЛЕКТАМИ
 const ROOT_DIR = path.join(__dirname, 'IN');
-// XML для пустой строки (пустого параграфа)
 const EMPTY_LINE_XML = '<w:p/>'; 
 
 function processBatches() {
-    // 1. Проверяем существование папки IN
     if (!fs.existsSync(ROOT_DIR)) {
-        console.error(`Папка ${ROOT_DIR} не найдена! Создайте её и положите туда папки с документами.`);
+        console.error(`Папка ${ROOT_DIR} не найдена!`);
         return;
     }
-
-    // 2. Получаем список всех папок внутри IN (каждая папка - один комплект)
-    const batches = fs.readdirSync(ROOT_DIR).filter(file => {
-        return fs.statSync(path.join(ROOT_DIR, file)).isDirectory();
-    });
-
+    const batches = fs.readdirSync(ROOT_DIR).filter(file => fs.statSync(path.join(ROOT_DIR, file)).isDirectory());
     if (batches.length === 0) {
-        console.log('В папке IN нет подпапок для обработки.');
+        console.log('Нет папок в IN.');
         return;
     }
-
     console.log(`Найдено комплектов: ${batches.length}`);
-
-    // 3. Обрабатываем каждую папку отдельно
-    batches.forEach(batchName => {
-        const batchDir = path.join(ROOT_DIR, batchName);
-        processSingleBatch(batchDir, batchName);
-    });
+    batches.forEach(batchName => processSingleBatch(path.join(ROOT_DIR, batchName), batchName));
 }
 
 function processSingleBatch(inputDir, folderName) {
-    // Получаем список docx файлов, начинающихся с цифры
     const files = fs.readdirSync(inputDir)
         .filter(file => file.endsWith('.docx') && /^\d/.test(file))
         .sort((a, b) => parseInt(a) - parseInt(b));
 
-    if (files.length === 0) {
-        console.warn(`[SKIP] В папке "${folderName}" нет подходящих docx файлов.`);
-        return;
-    }
+    if (files.length === 0) return;
 
-    // 1. Берем первый файл как MASTER (основу)
+    // 1. Читаем Master
     const masterPath = path.join(inputDir, files[0]);
     let masterZip;
-    
-    try {
-        masterZip = new AdmZip(masterPath);
-    } catch (e) {
-        console.error(`[ERROR] Не удалось открыть мастер-файл в "${folderName}": ${e.message}`);
-        return;
-    }
-
+    try { masterZip = new AdmZip(masterPath); } catch (e) { return; }
     let masterXml = masterZip.readAsText('word/document.xml');
 
-    // Находим точку вставки в Master (перед последним sectPr или перед закрытием body)
-    let insertIndex = masterXml.lastIndexOf('<w:sectPr');
-    if (insertIndex === -1) {
-        insertIndex = masterXml.lastIndexOf('</w:body>');
-    }
+    // 2. Ищем точку вставки (самый надежный метод)
+    // Находим </w:body>. Всё, что перед ним — это контент + секции.
+    // Нам нужно вставить ПЕРЕД первой секцией, которая идет в конце.
+    // Секции в конце выглядят как <w:sectPr>...</w:sectPr> (может быть несколько) или <w:sectPr/>
+    // Мы ищем позицию первого <w:sectPr в "хвосте" body.
     
-    if (insertIndex === -1) {
-        console.error(`[ERROR] Структура файла ${files[0]} повреждена (нет body).`);
-        return;
+    const bodyEndIndex = masterXml.lastIndexOf('</w:body>');
+    if (bodyEndIndex === -1) return;
+
+    // Берем хвост (3000 символов)
+    const tail = masterXml.substring(Math.max(0, bodyEndIndex - 3000), bodyEndIndex);
+    
+    // Ищем ПЕРВЫЙ w:sectPr в этом хвосте.
+    // Регулярка ищет <w:sectPr с начала строки или после тега.
+    const sectPrMatch = tail.match(/<w:sectPr/);
+    
+    let insertIndex = bodyEndIndex;
+    if (sectPrMatch) {
+        // Если нашли sectPr, то точка вставки = начало хвоста + индекс найденного sectPr
+        insertIndex = (Math.max(0, bodyEndIndex - 3000)) + sectPrMatch.index;
     }
 
     let contentToAppend = '';
 
-    // 2. Проходим по остальным файлам
     if (files.length > 1) {
-        console.log(`>>> Обработка комплекта: "${folderName}" (${files.length} файлов)`);
-        
+        console.log(`>>> Обработка: "${folderName}"`);
         for (let i = 1; i < files.length; i++) {
             const filePath = path.join(inputDir, files[i]);
             try {
                 const zip = new AdmZip(filePath);
                 const xml = zip.readAsText('word/document.xml');
+                
+                // Парсим тело
+                const start = xml.indexOf('<w:body');
+                const end = xml.lastIndexOf('</w:body>');
 
-                // Вырезаем содержимое body
-                const bodyMatch = xml.match(/<w:body[^>]*>([\s\S]*?)<\/w:body>/);
-
-                if (bodyMatch && bodyMatch[1]) {
-                    let content = bodyMatch[1];
-
-                    // Удаляем настройки секций (sectPr), чтобы текст просто лился дальше
-                    content = content.replace(/<w:sectPr[\s\S]*?(\/|<\/w:sectPr)>/g, '');
-
-                    // Добавляем ПУСТУЮ СТРОКУ перед контентом и сам контент
-                    contentToAppend += EMPTY_LINE_XML + content;
+                if (start !== -1 && end !== -1) {
+                    const bodyTagClose = xml.indexOf('>', start);
+                    if (bodyTagClose !== -1 && bodyTagClose < end) {
+                        let content = xml.substring(bodyTagClose + 1, end);
+                        
+                        // Очистка
+                        content = cleanContent(content);
+                        contentToAppend += EMPTY_LINE_XML + content;
+                    }
                 }
-            } catch (err) {
-                console.warn(`[WARN] Ошибка чтения файла ${files[i]}: ${err.message}`);
-            }
+            } catch (err) { }
         }
-
-        // 3. Вклеиваем собранный текст в Master
-        const finalXml = masterXml.slice(0, insertIndex) + contentToAppend + masterXml.slice(insertIndex);
         
-        // Обновляем XML в памяти архива
+        const finalXml = masterXml.slice(0, insertIndex) + contentToAppend + masterXml.slice(insertIndex);
         masterZip.updateFile('word/document.xml', Buffer.from(finalXml, 'utf-8'));
-    } else {
-        console.log(`>>> Комплект "${folderName}" состоит из 1 файла. Просто копируем.`);
     }
 
-    // 4. Сохраняем результат в корень папки IN
     const outputFilePath = path.join(ROOT_DIR, `${folderName}.docx`);
     masterZip.writeZip(outputFilePath);
-    
-    console.log(`[OK] Сохранен: IN/${folderName}.docx`);
+    console.log(`[OK] Saved: ${folderName}.docx`);
 }
 
-// Запуск
+function cleanContent(xml) {
+    let c = xml;
+    
+    // 1. Удаляем ВСЕ sectPr (и полные, и короткие, и с атрибутами)
+    // Важно: жадность регулярки. Ищем от <w:sectPr до </w:sectPr> или />
+    c = c.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, '');
+    c = c.replace(/<w:sectPr[\s\S]*?\/>/g, '');
+
+    // 2. Удаляем конфликтующие атрибуты (грубый метод без кавычек)
+    // Удаляем w14:paraId="..." и w:rsid...="..."
+    
+    const attrs = [
+        'w14:paraId', 'w14:textId',
+        'w:rsidR', 'w:rsidRDefault', 'w:rsidP', 'w:rsidRPr',
+        'w:id'
+    ];
+    
+    attrs.forEach(attr => {
+        // Ищем: (пробел или нет) + имя + ="..." 
+        const regex = new RegExp(`${attr}="[^"]*"`, 'g');
+        c = c.replace(regex, '');
+        // И с одинарными кавычками
+        const regexSingle = new RegExp(`${attr}='[^']*'`, 'g');
+        c = c.replace(regexSingle, '');
+    });
+
+    return c;
+}
+
 processBatches();

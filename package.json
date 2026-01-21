@@ -1,0 +1,37 @@
+{
+  "name": "docx-builder",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "author": "Alexander Kuzikov",
+  "description": "A simple Node.js utility for batch merging DOCX files by direct XML manipulation",
+  "homepage": "https://github.com/AlexanderKuzikov/DOCX-Builder#readme",
+  "keywords": [
+    "docx",
+    "merge",
+    "builder",
+    "xml",
+    "automation",
+    "document-processing"
+  ],
+  "license": "Apache-2.0",
+  "main": "builder.js",
+  "packages": {},
+  "bugs": {
+    "url": "https://github.com/AlexanderKuzikov/DOCX-Builder/issues"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlexanderKuzikov/DOCX-Builder.git"
+  },
+  "scripts": {
+    "start": "node builder.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  }
+}
