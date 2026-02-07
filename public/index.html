@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>DOCX Orchestrator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <!-- 1. ГЕНЕРАТОР -->
+        <div class="panel">
+            <div class="panel-header">
+                <h3>Создание структуры папок</h3>
+                <span style="font-size:11px; color:#666; cursor:pointer;" onclick="toggleAllCases()">Выбрать все /
+                    Снять</span>
+            </div>
+
+            <div class="input-row" style="margin-bottom: 8px;">
+                <input type="text" id="docTypeInput"
+                    placeholder="Введите название документа (например: Ходатайство об отложении)">
+                <button class="btn-create" onclick="createStructure()">Создать</button>
+            </div>
+
+            <div class="tags-wrapper" id="casesContainer"></div>
+        </div>
+
+        <!-- 2. ТУЛБАР -->
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <button class="btn" onclick="runRenamer()">
+                    🪄 Переименовать
+                </button>
+                <button class="btn btn-primary" onclick="runBuildAll()">
+                    🏗️ Собрать всё
+                </button>
+            </div>
+
+            <div class="toolbar-group">
+                <button class="btn" onclick="loadFolders()">
+                    🔄 Обновить
+                </button>
+                <button class="btn" onclick="toggleSettings()">
+                    ⚙️ Настройки
+                </button>
+                <button class="btn btn-danger" onclick="shutdownServer()" title="Остановить сервер">
+                    ⏻ Выход
+                </button>
+            </div>
+        </div>
+
+        <!-- 3. ТАБЛИЦА -->
+        <div class="panel" style="padding: 0; overflow: hidden;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 50%;">Папка проекта</th>
+                        <th style="width: 15%;">Статус</th>
+                        <th style="width: 20%;">Результат</th>
+                        <th style="width: 15%; text-align: right;">Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="folderTable"></tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <!-- SETTINGS MODAL -->
+    <div id="settingsModal">
+        <div class="modal-content">
+            <h2 style="margin-top:0; font-size:14px; color:#fff; font-weight:600; text-transform:uppercase;">Настройки
+            </h2>
+            <p style="color:#888; font-size:12px; margin-bottom:5px;">Путь к рабочей папке (IN):</p>
+
+            <input type="text" id="settingsInDir"
+                style="width:100%; box-sizing:border-box; border-radius:3px; margin-bottom:15px; padding:6px;">
+
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn" onclick="toggleSettings()">Отмена</button>
+                <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function api(url, method = 'GET', body = null) {
+            try {
+                const opts = { method, headers: { 'Content-Type': 'application/json' } };
+                if (body) opts.body = JSON.stringify(body);
+                return await (await fetch('/api' + url, opts)).json();
+            } catch (e) { console.error(e); return {}; }
+        }
+
+        let selectedCases = new Set();
+
+        async function init() {
+            const cases = await api('/cases');
+            if (cases && cases.length) renderCases(cases);
+            loadFolders();
+            loadSettings();
+        }
+
+        function renderCases(cases) {
+            const container = document.getElementById('casesContainer');
+            container.innerHTML = cases.map(c => `
+            <div class="tag selected" onclick="toggleCase(this, '${c}')">${c}</div>
+        `).join('');
+            cases.forEach(c => selectedCases.add(c));
+        }
+
+        function toggleCase(el, name) {
+            if (selectedCases.has(name)) { selectedCases.delete(name); el.classList.remove('selected'); }
+            else { selectedCases.add(name); el.classList.add('selected'); }
+        }
+
+        function toggleAllCases() {
+            const tags = document.querySelectorAll('.tag');
+            const allSelected = tags.length === document.querySelectorAll('.tag.selected').length;
+            tags.forEach(t => t.classList.toggle('selected', !allSelected));
+            if (allSelected) selectedCases.clear();
+            else document.querySelectorAll('.tag').forEach(t => selectedCases.add(t.innerText));
+        }
+
+        async function loadFolders() {
+            const folders = await api('/folders');
+            const tbody = document.getElementById('folderTable');
+
+            if (!folders || !folders.length) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:20px; color:#555;">Нет папок</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = folders.map(f => {
+                let status = '<span class="dot dot-empty"></span> <span style="color:#666">Пусто</span>';
+                if (!f.isEmpty) {
+                    status = f.isRenamed
+                        ? '<span class="dot dot-ready"></span> <span style="color:#fff">Готов</span>'
+                        : '<span class="dot dot-raw"></span> <span style="color:#dcb67a">Rename</span>';
+                }
+
+                let result = '<span style="color:#444">—</span>';
+                if (f.isBuilt) result = `<a class="file-link" onclick="openFile('${f.name}')">📄 DOCX</a>`;
+
+                let buildBtn = !f.isEmpty ? `<button class="btn-mini btn-mini-build" onclick="buildOne('${f.name}')" title="Собрать" style="font-size:10px;">🔨</button>` : '';
+
+                return `
+                <tr>
+                    <td><div style="display:flex; align-items:center;"><span class="folder-icon">📂</span> <span style="cursor:pointer;" onclick="openFolder('${f.name}')">${f.name}</span></div></td>
+                    <td>${status}</td>
+                    <td>${result}</td>
+                    <td style="text-align:right;">
+                        <div style="display:inline-flex; gap:4px;">
+                            ${buildBtn} 
+                            <button class="btn-mini" onclick="openFolder('${f.name}')" title="Открыть папку" style="font-size:10px;">↗️</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            }).join('');
+        }
+
+        async function createStructure() {
+            const docType = document.getElementById('docTypeInput').value;
+            if (!docType) return alert('Введите название!');
+            await api('/create', 'POST', { docType, selectedCases: Array.from(selectedCases) });
+            loadFolders();
+        }
+        async function runRenamer() { await api('/run/renamer', 'POST'); loadFolders(); }
+        async function buildOne(name) { if (confirm(`Собрать "${name}"?`)) await api('/run/builder', 'POST', { folderName: name }); loadFolders(); }
+        async function runBuildAll() { if (confirm('Собрать все папки?')) await api('/run/builder', 'POST'); loadFolders(); }
+        async function openFolder(name) { await api('/open', 'POST', { name, isFile: false }); }
+        async function openFile(name) { await api('/open', 'POST', { name, isFile: true }); }
+
+        async function shutdownServer() {
+            if (!confirm('Выключить сервер?')) return;
+            await api('/shutdown', 'POST');
+            document.body.innerHTML = '<div style="display:flex;height:100vh;justify-content:center;align-items:center;color:#666;"><h1>Сервер выключен</h1></div>';
+            setTimeout(() => window.close(), 1000);
+        }
+
+        function toggleSettings() { document.getElementById('settingsModal').style.display = document.getElementById('settingsModal').style.display === 'flex' ? 'none' : 'flex'; }
+        async function loadSettings() { const res = await api('/settings'); if (res.inDir) document.getElementById('settingsInDir').value = res.inDir; }
+        async function saveSettings() {
+            const inDir = document.getElementById('settingsInDir').value;
+            const res = await api('/settings', 'POST', { inDir });
+            if (res.error) alert(res.error); else { toggleSettings(); loadFolders(); }
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>

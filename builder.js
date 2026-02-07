@@ -2,104 +2,131 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-const ROOT_DIR = path.join(__dirname, 'IN');
+// --- ЧТЕНИЕ НАСТРОЕК ---
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+let IN_DIR = path.join(__dirname, 'IN'); // Дефолтное значение
 
-// Пустая строка с keepNext (не отрывать от следующего)
-const EMPTY_LINE_XML = '<w:p><w:pPr><w:keepNext/></w:pPr></w:p>'; 
-
-function processBatches() {
-    if (!fs.existsSync(ROOT_DIR)) {
-        console.error(`Папка ${ROOT_DIR} не найдена!`);
-        return;
+if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+        const settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+        if (settings.inDir) {
+            IN_DIR = settings.inDir;
+            // Убираем кавычки если вдруг попали при копировании
+            IN_DIR = IN_DIR.replace(/^"|"$/g, ''); 
+        }
+    } catch (e) {
+        console.error('Ошибка чтения settings.json, используется дефолтный путь.', e);
     }
-    const batches = fs.readdirSync(ROOT_DIR).filter(file => fs.statSync(path.join(ROOT_DIR, file)).isDirectory());
-    if (batches.length === 0) {
-        console.log('Нет папок в IN.');
-        return;
-    }
-    console.log(`Найдено комплектов: ${batches.length}`);
-    batches.forEach(batchName => processSingleBatch(path.join(ROOT_DIR, batchName), batchName));
 }
 
-function processSingleBatch(inputDir, folderName) {
-    const files = fs.readdirSync(inputDir)
-        // Фильтр и сортировка с поддержкой дробных чисел (1.5, 2.1 и т.д.)
-        .filter(file => file.endsWith('.docx') && /^\d/.test(file))
+// --- ЛОГИКА ---
+const specificFolder = process.argv[2]; // node builder.js "Папка"
+
+function start() {
+    console.log(`Working directory: ${IN_DIR}`);
+    
+    if (!fs.existsSync(IN_DIR)) {
+        console.error(`Папка ${IN_DIR} не найдена.`);
+        return;
+    }
+
+    let foldersToProcess = [];
+
+    if (specificFolder) {
+        // Режим одного файла
+        const targetPath = path.join(IN_DIR, specificFolder);
+        if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+            foldersToProcess.push(specificFolder);
+            console.log(`🎯 Целевая сборка: "${specificFolder}"`);
+        } else {
+            console.error(`❌ Папка "${specificFolder}" не найдена в IN/`);
+            return;
+        }
+    } else {
+        // Режим "Собрать всё"
+        foldersToProcess = fs.readdirSync(IN_DIR).filter(file => 
+            fs.statSync(path.join(IN_DIR, file)).isDirectory()
+        );
+        console.log(`📦 Пакетная сборка: найдено ${foldersToProcess.length} папок.`);
+    }
+
+    foldersToProcess.forEach(processFolder);
+}
+
+function processFolder(folderName) {
+    console.log(`\nProcessing: ${folderName}...`);
+    const folderPath = path.join(IN_DIR, folderName);
+    const outputPath = path.join(IN_DIR, `${folderName}.docx`); 
+
+    // 1. Собираем файлы docx в папке
+    const files = fs.readdirSync(folderPath)
+        .filter(f => f.endsWith('.docx') && !f.startsWith('~')) // Игнор временных файлов
         .sort((a, b) => parseFloat(a) - parseFloat(b));
 
-    if (files.length === 0) return;
-
-    const masterPath = path.join(inputDir, files[0]);
-    let masterZip;
-    try { masterZip = new AdmZip(masterPath); } catch (e) { return; }
-    let masterXml = masterZip.readAsText('word/document.xml');
-
-    const bodyEndIndex = masterXml.lastIndexOf('</w:body>');
-    if (bodyEndIndex === -1) return;
-
-    const tail = masterXml.substring(Math.max(0, bodyEndIndex - 3000), bodyEndIndex);
-    const sectPrMatch = tail.match(/<w:sectPr/);
-    
-    let insertIndex = bodyEndIndex;
-    if (sectPrMatch) {
-        insertIndex = (Math.max(0, bodyEndIndex - 3000)) + sectPrMatch.index;
+    if (files.length === 0) {
+        console.log(`  Skipped (пусто)`);
+        return;
     }
 
-    let contentToAppend = '';
+    console.log(`  Files: ${files.join(', ')}`);
 
-    if (files.length > 1) {
-        console.log(`>>> Обработка: "${folderName}"`);
-        for (let i = 1; i < files.length; i++) {
-            const filePath = path.join(inputDir, files[i]);
-            try {
-                const zip = new AdmZip(filePath);
-                const xml = zip.readAsText('word/document.xml');
-                
-                const start = xml.indexOf('<w:body');
-                const end = xml.lastIndexOf('</w:body>');
-
-                if (start !== -1 && end !== -1) {
-                    const bodyTagClose = xml.indexOf('>', start);
-                    if (bodyTagClose !== -1 && bodyTagClose < end) {
-                        let content = xml.substring(bodyTagClose + 1, end);
-                        
-                        content = cleanContent(content);
-                        contentToAppend += EMPTY_LINE_XML + content;
-                    }
-                }
-            } catch (err) { }
-        }
+    // 2. Берем первый файл за основу (Master)
+    const masterFile = files[0];
+    const masterPath = path.join(folderPath, masterFile);
+    
+    try {
+        const masterBuffer = fs.readFileSync(masterPath);
+        const zip = new AdmZip(masterBuffer);
+        let masterXml = zip.readAsText("word/document.xml");
         
-        const finalXml = masterXml.slice(0, insertIndex) + contentToAppend + masterXml.slice(insertIndex);
-        masterZip.updateFile('word/document.xml', Buffer.from(finalXml, 'utf-8'));
+        const bodyEndIndex = masterXml.lastIndexOf('</w:body>');
+        if (bodyEndIndex === -1) {
+            console.error('  Error: Invalid Master DOCX (no w:body)');
+            return;
+        }
+
+        let contentToAppend = '';
+
+        // Проходим по остальным файлам
+        for (let i = 1; i < files.length; i++) {
+            const partFile = files[i];
+            const partPath = path.join(folderPath, partFile);
+            
+            try {
+                const partZip = new AdmZip(partPath);
+                let partXml = partZip.readAsText("word/document.xml");
+
+                const startBody = partXml.indexOf('<w:body>') + 8;
+                const endBody = partXml.lastIndexOf('</w:body>');
+                let bodyContent = partXml.substring(startBody, endBody);
+
+                // Чистка
+                bodyContent = bodyContent.replace(/<w:sectPr[^>]*>[\s\S]*?<\/w:sectPr>/g, '');
+                bodyContent = bodyContent.replace(/ w14:paraId="[^"]+"/g, '');
+                bodyContent = bodyContent.replace(/ w14:textId="[^"]+"/g, '');
+
+                contentToAppend += '<w:p/>' + bodyContent;
+
+            } catch (err) {
+                console.error(`  Error reading ${partFile}: ${err.message}`);
+            }
+        }
+
+        const sectPrIndex = masterXml.lastIndexOf('<w:sectPr');
+        let insertPosition = bodyEndIndex;
+
+        if (sectPrIndex > -1 && sectPrIndex < bodyEndIndex) {
+            insertPosition = sectPrIndex;
+        }
+
+        const finalXml = masterXml.slice(0, insertPosition) + contentToAppend + masterXml.slice(insertPosition);
+        zip.updateFile("word/document.xml", Buffer.from(finalXml, 'utf8'));
+        
+        zip.writeZip(outputPath);
+        console.log(`  ✅ Built: ${outputPath}`);
+    } catch (e) {
+        console.error(`  Fatal error processing folder: ${e.message}`);
     }
-
-    const outputFilePath = path.join(ROOT_DIR, `${folderName}.docx`);
-    masterZip.writeZip(outputFilePath);
-    console.log(`[OK] Saved: ${folderName}.docx`);
 }
 
-function cleanContent(xml) {
-    let c = xml;
-    
-    // 1. sectPr (безопасные регулярки без new RegExp)
-    c = c.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, '');
-    c = c.replace(/<w:sectPr[\s\S]*?\/>/g, '');
-
-    // 2. Атрибуты ID
-    c = c.replace(/w14:paraId=["'][^"']*["']/g, '');
-    c = c.replace(/w14:textId=["'][^"']*["']/g, '');
-
-    // 3. Версионность
-    c = c.replace(/w:rsidR=["'][^"']*["']/g, '');
-    c = c.replace(/w:rsidRDefault=["'][^"']*["']/g, '');
-    c = c.replace(/w:rsidP=["'][^"']*["']/g, '');
-    c = c.replace(/w:rsidRPr=["'][^"']*["']/g, '');
-
-    // 4. w:id (на всякий случай убираем, раз с ним открывалось)
-    c = c.replace(/w:id=["'][^"']*["']/g, '');
-
-    return c;
-}
-
-processBatches();
+start();

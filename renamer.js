@@ -1,12 +1,27 @@
 const fs = require('fs');
 const path = require('path');
 
-// НАСТРОЙКИ
-const ROOT_DIR = path.join(__dirname, 'IN');
+// --- ЧТЕНИЕ НАСТРОЕК ---
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 const CONFIG_FILE = path.join(__dirname, 'renamer_config.json');
+let ROOT_DIR = path.join(__dirname, 'IN'); // Дефолтное значение
+
+if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+        const settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+        if (settings.inDir) {
+            ROOT_DIR = settings.inDir;
+            ROOT_DIR = ROOT_DIR.replace(/^"|"$/g, '');
+        }
+    } catch (e) {
+        console.error('Ошибка чтения settings.json, используется дефолтный путь.', e);
+    }
+}
 
 function startRenaming() {
-    // 1. Проверяем наличие папки IN
+    console.log(`Working directory: ${ROOT_DIR}`);
+
+    // 1. Проверяем наличие папки
     if (!fs.existsSync(ROOT_DIR)) {
         console.error(`Папка ${ROOT_DIR} не найдена!`);
         return;
@@ -20,10 +35,11 @@ function startRenaming() {
             config = JSON.parse(rawConfig);
         } else {
             console.error(`Файл конфигурации ${CONFIG_FILE} не найден.`);
-            return;
+            // Можно использовать дефолтный конфиг, если файла нет
+            config = {"1": "Шапка", "2": "Заголовок"}; 
         }
     } catch (e) {
-        console.error('Ошибка чтения JSON конфига:', e.message);
+        console.error('Ошибка чтения renamer_config.json:', e.message);
         return;
     }
 
@@ -37,8 +53,6 @@ function startRenaming() {
         return;
     }
 
-    console.log(`Найдено папок: ${folders.length}`);
-
     // 4. Обрабатываем каждую папку
     folders.forEach(folderName => {
         const folderPath = path.join(ROOT_DIR, folderName);
@@ -47,9 +61,6 @@ function startRenaming() {
 }
 
 function processFolder(folderPath, folderName, config) {
-    // Извлекаем текст из скобок папки
-    // Логика: от ПЕРВОЙ '(' до ПОСЛЕДНЕЙ ')' — это поддерживает вложенные скобки
-    // Пример: "Папка (Контекст (Уточнение))" -> "Контекст (Уточнение)"
     let contextText = '';
     const firstBracket = folderName.indexOf('(');
     const lastBracket = folderName.lastIndexOf(')');
@@ -58,48 +69,38 @@ function processFolder(folderPath, folderName, config) {
         contextText = folderName.substring(firstBracket + 1, lastBracket);
     }
 
-    // Читаем файлы
-    const files = fs.readdirSync(folderPath).filter(f => f.endsWith('.docx'));
+    const files = fs.readdirSync(folderPath).filter(f => f.endsWith('.docx') && !f.startsWith('~'));
 
     files.forEach(file => {
-        // Проверяем формат имени: "ЦИФРА_..."
-        // Используем match, чтобы поймать префикс (цифры + возможно точки для 1.5)
         const match = file.match(/^([\d\.]+)_/);
         
         if (match) {
-            const prefix = match[1]; // Например "1" или "1.5"
-            
-            // Ищем правило в конфиге для этого префикса
-            // (или для целой части числа, если нужно, но пока ищем точное совпадение ключа)
-            // Если у вас 1.5, а в конфиге только "1", то имя не поменяется, если не добавить логику округления.
-            // Сейчас логика: ищем точное совпадение ключа. Если ключ "1", он сработает для "1_".
-            
-            // Если нужно, чтобы для "1.5_" бралось правило от "1", раскомментируйте строку ниже:
-            // const configKey = prefix.split('.')[0]; 
-            const configKey = prefix; 
+            const prefix = match[1]; 
+            const configKey = prefix; // Ищем точное совпадение ключа ("1", "1.5" и т.д.)
 
             if (config[configKey]) {
-                const mapName = config[configKey]; // "Шапка"
+                const mapName = config[configKey];
                 
-                // Формируем новое имя
-                // База: "1_Шапка"
                 let newNameBase = `${prefix}_${mapName}`;
                 
-                // Добавляем контекст в скобках, если он был в имени папки
                 if (contextText) {
                     newNameBase += ` (${contextText})`;
                 }
 
                 const newFileName = `${newNameBase}.docx`;
 
-                // Переименовываем только если имя отличается
                 if (file !== newFileName) {
                     const oldPath = path.join(folderPath, file);
                     const newPath = path.join(folderPath, newFileName);
                     
                     try {
-                        fs.renameSync(oldPath, newPath);
-                        console.log(`[RENAME] ${folderName}\n   └─ ${file} -> ${newFileName}`);
+                        // Проверка на случай, если файл с новым именем уже есть
+                        if (fs.existsSync(newPath)) {
+                            console.log(`[SKIP] Файл ${newFileName} уже существует.`);
+                        } else {
+                            fs.renameSync(oldPath, newPath);
+                            console.log(`[RENAME] ${folderName}\n   └─ ${file} -> ${newFileName}`);
+                        }
                     } catch (err) {
                         console.error(`[ERROR] Не удалось переименовать ${file}: ${err.message}`);
                     }
